@@ -1,23 +1,28 @@
 [build-system]
-requires = ["setuptools>=61.0"]
-build-backend = "setuptools.backends._legacy:_Backend"
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "matlab-os"
-version = "0.1.0"
+version = "1.0.0rc1"
 description = "MATLAB Expert Agent - Senior-Level MATLAB and Simulink Engineering Agent"
 requires-python = ">=3.11"
 dependencies = [
-    "matlab-engine>=1.0",
-    "sqlite>=3.35",
+    "requests>=2.31",
 ]
+
+[project.optional-dependencies]
+engine = ["matlabengine==24.2.*"]
+dev = ["pytest>=7.0"]
 
 [project.scripts]
 matlab-os-agent = "matlab_os.main:main"
 v1-cli = "matlab_os.cli.cli:main"
 
 [tool.setuptools.packages.find]
-where = ["matlab_os"]
+where = ["."]
+include = ["matlab_os*"]
+namespaces = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
