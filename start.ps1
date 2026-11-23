@@ -1,104 +1,167 @@
-# Local AI OS V1 Two-Command Launcher
-# Usage: cd "E:\matlab os" .\start.ps1
-# This launcher starts Local AI OS V1 with two PowerShell commands.
-# It automatically starts the MATLAB MCP server, waits for it to be healthy,
-# and opens the browser interface.
+#requires -version 5.1
+<#
+.SYNOPSIS
+    Local AI OS V1 launcher.
 
-# Resolve MATLAB path - check hardcoded path first, then config.toml
-$MATLAB_ENGINE_PATH = "D:/Apps/Matlab/bin/matlab.exe"
-if (-not (Test-Path "$MATLAB_ENGINE_PATH")) {
-    $configPath = "e:\matlab os\config.toml"
-    if (Test-Path $configPath) {
-        $configContent = Get-Content $configPath
-        $engineMatch = $configContent -match '^\s*engine_path\s*="(.+)"'
-        if ($engineMatch) {
-            $MATLAB_ENGINE_PATH = $matches[1]
+.DESCRIPTION
+    Reads [mcp] host and port from config.toml, starts the Simulink Agentic
+    Toolkit MCP server (matlab-mcp-server.exe) if it is not already running,
+    opens the interface in the browser, and stops that server again when you
+    press Ctrl+C.
+
+    Only a server that this launcher started is stopped on exit. A server that
+    was already running when you launched is left alone.
+
+    The MCP server executable is looked up in this order:
+      1. mcp_server_path in config.toml
+      2. %USERPROFILE%\.matlab\agentic-toolkits\bin\matlab-mcp-server.exe
+
+.EXAMPLE
+    cd "E:\matlab os"
+    .\start.ps1
+#>
+
+$ErrorActionPreference = 'Stop'
+
+# ------------------------------------------------------------------------
+# Settings from config.toml (with defaults)
+# ------------------------------------------------------------------------
+$ProjectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+$ConfigPath = Join-Path $ProjectRoot 'config.toml'
+
+$McpHost = 'localhost'
+$McpPort = 31515
+$McpServerPath = $null
+
+if (Test-Path -LiteralPath $ConfigPath) {
+    # Match one line at a time: $matches is only populated for a single string,
+    # never when -match filters a whole array.
+    foreach ($line in Get-Content -LiteralPath $ConfigPath) {
+        if ($line -match '^\s*host\s*=\s*"([^"]+)"') {
+            $McpHost = $matches[1]
+        }
+        elseif ($line -match '^\s*port\s*=\s*(\d+)') {
+            $McpPort = [int] $matches[1]
+        }
+        elseif ($line -match '^\s*mcp_server_path\s*=\s*"([^"]+)"') {
+            $McpServerPath = $matches[1]
         }
     }
 }
-
-if (-not (Test-Path "$MATLAB_ENGINE_PATH")) {
-    Write-Error "Failed to start MCP server. Check that MATLAB is installed at $MATLAB_ENGINE_PATH"
-    exit 1
+else {
+    Write-Warning "config.toml not found at $ConfigPath - using defaults."
+    Write-Warning 'Copy config.example.toml to config.toml and set engine_path first.'
 }
 
-Write-Host "Starting MATLAB MCP server..."
+if (-not $McpServerPath) {
+    $McpServerPath = Join-Path $env:USERPROFILE '.matlab\agentic-toolkits\bin\matlab-mcp-server.exe'
+}
 
-# MCP configuration from config.toml (V1 Release Candidate)
-$MCP_HOST = "localhost"
-$MCP_PORT = 31515
-$MCP_URL = "http://${MCP_HOST}:$MCP_PORT"
-$mcpUrl = "$MCP_URL/health"
+$McpUrl = "http://${McpHost}:${McpPort}"
+$HealthUrl = "$McpUrl/health"
 
-# Check if MCP server is already running
-$mcpHealthy = $false
+# ------------------------------------------------------------------------
+# Health check
+# ------------------------------------------------------------------------
+function Test-McpHealth {
+    try {
+        $response = Invoke-WebRequest -Uri $HealthUrl -UseBasicParsing -TimeoutSec 5
+        return ($response.StatusCode -eq 200)
+    }
+    catch {
+        # Refused, timed out, 404 - all mean "not ready yet".
+        return $false
+    }
+}
+
+# ------------------------------------------------------------------------
+# Ctrl+C
+#   Read from the console rather than through a .NET event: a script block
+#   cannot be attached to an event (the event fires on a thread with no
+#   runspace), and CancelKeyPress is only reachable through compiled C#.
+# ------------------------------------------------------------------------
+function Test-CtrlCPressed {
+    try {
+        if (-not [Console]::KeyAvailable) { return $false }
+        $key = [Console]::ReadKey($true)
+        return (($key.Key -eq [ConsoleKey]::C) -and ($key.Modifiers -band [ConsoleModifiers]::Control))
+    }
+    catch {
+        return $false
+    }
+}
+
+# ------------------------------------------------------------------------
+# Start, wait, clean up
+# ------------------------------------------------------------------------
+$serverProcess = $null
+$ownsServer = $false
 
 try {
-    $response = Invoke-WebRequest -Uri $mcpUrl -Method Get -TimeoutSec 5
-    $mcpHealthy = $response.StatusCode -eq 200
-} catch {
-    # MCP server not running - will start it
-}
+    if (Test-McpHealth) {
+        Write-Host "MCP server already running at $McpUrl."
+    }
+    else {
+        if (-not (Test-Path -LiteralPath $McpServerPath)) {
+            throw "MCP server not found at:`n  $McpServerPath`nInstall the Simulink Agentic Toolkit, or set mcp_server_path in config.toml."
+        }
 
-# Start MATLAB MCP server if not already healthy
-if (-not $mcpHealthy) {
-    Start-Process -FilePath $MATLAB_ENGINE_PATH -ArgumentList "-r", "startMCPServer; exit" -NoNewWindow | Out-Null
+        Write-Host 'Starting Simulink Agentic Toolkit MCP server...'
+        $serverProcess = Start-Process -FilePath $McpServerPath -PassThru
+        $ownsServer = $true
 
-    # Wait for server to become healthy
-    $maxWait = 60
-    $waited = 0
-    while ($waited -lt $maxWait) {
-        try {
-            $response = Invoke-WebRequest -Uri $mcpUrl -Method Get -TimeoutSec 5
-            if ($response.StatusCode -eq 200) {
-                $mcpHealthy = $true
+        $deadline = (Get-Date).AddSeconds(60)
+        while ((Get-Date) -lt $deadline) {
+            if ($serverProcess.HasExited) {
+                throw "MCP server exited immediately (exit code $($serverProcess.ExitCode)). If it speaks stdio only, it has to be started by your MCP client instead."
+            }
+            if (Test-McpHealth) {
                 break
             }
-        } catch {
-            # Server not yet ready
+            Start-Sleep -Seconds 2
         }
-        Start-Sleep -Seconds 2
-        $waited += 2
+
+        if (-not (Test-McpHealth)) {
+            throw "MCP server did not answer $HealthUrl within 60 seconds. Check $McpUrl manually."
+        }
+
+        Write-Host "MCP server is healthy (PID $($serverProcess.Id))."
+    }
+
+    Write-Host "Opening $McpUrl in your browser..."
+    Start-Process $McpUrl
+
+    Write-Host ''
+    Write-Host 'Local AI OS V1 is running.'
+    Write-Host "Interface: $McpUrl"
+    Write-Host ''
+    Write-Host 'Press Ctrl+C to stop the MCP server and exit.'
+
+    if (-not [Console]::IsInputRedirected) {
+        while (-not (Test-CtrlCPressed)) {
+            Start-Sleep -Milliseconds 250
+        }
+        Write-Host ''
+        Write-Host 'Ctrl+C received.'
+    }
+    else {
+        $null = Read-Host 'Press Enter to stop the MCP server and exit'
     }
 }
-
-# Open browser to the interface
-if ($mcpHealthy) {
-    Write-Host "Opening browser to $MCP_URL ..."
-    # -Verb RunAs unnecessarily elevates the browser; launch without elevation for local URLs
-    Start-Process -Uri $MCP_URL
-
-    # Display status
-    Write-Host "Local AI OS V1 is running."
-    Write-Host "Interface: $MCP_URL"
-    Write-Host "Press Ctrl+C to stop the MATLAB MCP server and exit."
-
-    # Get the MATLAB process ID for cleanup on Ctrl+C
-$matlabProcess = Get-Process matlab -ErrorAction SilentlyContinue
-
-
-# Ctrl+C handler - only kill processes started by this launcher
-$ctrlCAction = {
-    if ($matlabProcess) {
-        Write-Host "`nCtrl+C received - stopping MATLAB MCP server (PID $($matlabProcess.Id))..."
-        try {
-            Stop-Process -Id $matlabProcess.Id -Force -ErrorAction Stop
-        } catch {
-            # Process already terminated
+finally {
+    if ($ownsServer) {
+        if ($serverProcess -and -not $serverProcess.HasExited) {
+            Write-Host "Stopping MCP server (PID $($serverProcess.Id))..."
+            Stop-Process -Id $serverProcess.Id -Force -ErrorAction SilentlyContinue
+            $null = $serverProcess.WaitForExit(5000)
+        }
+        else {
+            Write-Host 'MCP server had already stopped.'
         }
     }
-    Write-Host "`nExiting Local AI OS V1."
-    exit 0
-}
+    else {
+        Write-Host 'The MCP server was already running before launch - leaving it running.'
+    }
 
-$null = [Console]::Add_KeyPress($ctrlCAction)
-
-# Wait for Ctrl+C
-Write-Host "Press Ctrl+C to stop the MATLAB MCP server and exit."
-while ($true) {
-    Start-Sleep -Seconds 5
-}
-} else {
-    Write-Error "Failed to start MCP server. Check that MATLAB is installed at $MATLAB_ENGINE_PATH"
-    exit 1
+    Write-Host 'Local AI OS V1 stopped.'
 }
