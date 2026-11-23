@@ -1,0 +1,28 @@
+# Copy this file to config.toml and adjust the paths for the machine you are on.
+# config.toml itself is git-ignored, so this file is the recoverable copy.
+
+[agent]
+name = "MATLAB Expert Agent"
+version = "1.0.0rc1"
+description = "Senior-Level MATLAB and Simulink Engineering Agent"
+
+[mcp]
+host = "localhost"
+port = 31515
+timeout = 60
+# Point this at matlab.exe. Update it if MATLAB lives somewhere else
+# (a standard install is C:/Program Files/MATLAB/R2024b/bin/matlab.exe).
+engine_path = "D:/Apps/Matlab/bin/matlab.exe"
+# Optional. Defaults to %USERPROFILE%\.matlab\agentic-toolkits\bin\matlab-mcp-server.exe
+# mcp_server_path = "C:/Users/<you>/.matlab/agentic-toolkits/bin/matlab-mcp-server.exe"
+
+[database]
+path = "./data/matlab_agent.db"
+
+[approval]
+require_approval = true
+timeout_seconds = 300
+
+[logging]
+level = "INFO"
+file = "./logs/matlab_agent.log"
