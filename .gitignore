@@ -1,0 +1,43 @@
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+
+# Local configuration
+.env
+config.toml
+
+# Runtime output
+/data/
+/logs/
+*.db
+
+# Large local folders - many GB, never commit
+/models/
+/staging/
+/backups/
+backup_*/
+/external/
+/state/
+/cp_state/
+/phase9_state/
+/workspace/
+/workspace_v1_check/
+/diagnostics/
+
+# Old git history moved aside
+.git_old/
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+
+# Editors and OS
+.vscode/
+.idea/
+.DS_Store

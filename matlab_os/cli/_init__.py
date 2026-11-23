@@ -1,0 +1,1 @@
+"""V1 CLI package for Local AI OS."""
